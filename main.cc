@@ -7,16 +7,6 @@ handle <wl_display> get_display ()
 	if (!display)
 		lose ("Couldn't open the display");
 
-	static const wl_display_listener listener {
-		// Event "error"
-		[] (void*, wl_display*, void*, std::uint32_t id, const char* message) {
-			lose ("Object ", std::to_string (id), ": ", message);
-		},
-		// Event "delete_id"
-		nullptr
-	};
-
-	wl_display_add_listener (display.get (), &listener, nullptr);
 	return display;
 }
 
