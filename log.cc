@@ -3,10 +3,12 @@
 
 void log_debug_impl (composite_message message)
 {
+	#ifdef DEBUG
 	std::clog << "[debug] ";
 	for (const auto& s : message)
 		std::clog << s;
 	std::clog << std::endl;
+	#endif
 }
 
 void log_warning_impl (composite_message message)
