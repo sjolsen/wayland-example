@@ -6,6 +6,8 @@ handle <wl_display> get_display ()
 	auto display = wrap_handle (wl_display_connect (nullptr), wl_display_disconnect);
 	if (!display)
 		lose ("Couldn't open the display");
+	else
+		log_debug ("Successfully opened the display");
 
 	return display;
 }
@@ -15,6 +17,8 @@ handle <wl_registry> get_registry (handle <wl_display> display)
 	auto registry = wrap_handle (wl_display_get_registry (display.get ()), wl_registry_destroy);
 	if (!registry)
 		lose ("Couldn't obtain a reference to the registry");
+	else
+		log_debug ("Successfully obtained a reference to the registry");
 
 	static const wl_registry_listener listener {
 		// Event "global"
@@ -38,7 +42,8 @@ int main ()
 	auto display = get_display ();
 	auto registry = get_registry (display);
 
-	wl_display_sync (display.get ());
+	auto sync_callback = wrap_handle (wl_display_sync (display.get ()), wl_callback_destroy);
+	wl_display_roundtrip (display.get ());
 
 	return EXIT_SUCCESS;
 }
