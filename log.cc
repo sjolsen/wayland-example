@@ -19,7 +19,7 @@ void log_warning_impl (composite_message message)
 
 void log_error_impl (composite_message message)
 {
-	std::cerr << "[warning] ";
+	std::cerr << "[error] ";
 	for (const auto& s : message)
 		std::cerr << s;
 	std::cerr << std::endl;
