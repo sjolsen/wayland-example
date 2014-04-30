@@ -1,71 +1,7 @@
 #include "util.hh"
+#include "api_description.hh"
 #include <string_view>
 #include <wayland-client.h>
-
-const wl_interface* lookup_interface (std::string_view name, std::uint32_t version)
-{
-	struct entry
-	{
-		const char* const name;
-		const wl_interface* const interface;
-	};
-
-	static const entry list [] = {
-		{"wl_display",             &::wl_display_interface},
-		{"wl_registry",            &::wl_registry_interface},
-		{"wl_callback",            &::wl_callback_interface},
-		{"wl_compositor",          &::wl_compositor_interface},
-		{"wl_shm_pool",            &::wl_shm_pool_interface},
-		{"wl_shm",                 &::wl_shm_interface},
-		{"wl_buffer",              &::wl_buffer_interface},
-		{"wl_data_offer",          &::wl_data_offer_interface},
-		{"wl_data_source",         &::wl_data_source_interface},
-		{"wl_data_device",         &::wl_data_device_interface},
-		{"wl_data_device_manager", &::wl_data_device_manager_interface},
-		{"wl_shell",               &::wl_shell_interface},
-		{"wl_shell_surface",       &::wl_shell_surface_interface},
-		{"wl_surface",             &::wl_surface_interface},
-		{"wl_seat",                &::wl_seat_interface},
-		{"wl_pointer",             &::wl_pointer_interface},
-		{"wl_keyboard",            &::wl_keyboard_interface},
-		{"wl_touch",               &::wl_touch_interface},
-		{"wl_output",              &::wl_output_interface},
-		{"wl_region",              &::wl_region_interface},
-		{"wl_subcompositor",       &::wl_subcompositor_interface},
-		{"wl_subsurface",          &::wl_subsurface_interface},
-	};
-
-	using std::begin;
-	using std::end;
-	auto the_entry = std::find_if (begin (list), end (list), [name] (entry e) { return name.compare (e.name) == 0; });
-
-	if (the_entry == end (list) || the_entry->interface->version != version)
-		return nullptr;
-	else
-		return the_entry->interface;
-}
-
-void describe_message (const wl_message& message, std::string_view type)
-{
-	if (*message.types == nullptr)
-		log_debug ("  ", type, ": ", message.name, " (", message.signature, ")");
-	else
-		log_debug ("  ", type, ": ", message.name, " (", message.signature, ") -> ", (**message.types).name);
-}
-
-void describe_interface (const wl_interface& interface)
-{
-	log_debug ("Interface \"", interface.name, "\", version ", std::to_string (interface.version),
-	           " describes ", std::to_string (interface.method_count), " method(s) and ",
-	           std::to_string (interface.event_count), " event(s):");
-
-	for (int method = 0; method < interface.method_count; ++method)
-		describe_message (interface.methods [method], "Method");
-	for (int event = 0; event < interface.event_count; ++event)
-		describe_message (interface.events [event], "Event");
-}
-
-
 
 handle <wl_display> get_display ()
 {
@@ -78,7 +14,31 @@ handle <wl_display> get_display ()
 	return display;
 }
 
-handle <wl_registry> get_registry (handle <wl_display> display)
+struct registry_guts
+{
+	handle <wl_seat> seat;
+
+	void extract (wl_registry* registry, std::uint32_t id, const char* interface_name, std::uint32_t version)
+	{
+		auto* interface = lookup_interface (interface_name, version);
+		if (interface == &::wl_seat_interface) {
+			log_debug ("Extracting seat");
+			seat.reset (static_cast <wl_seat*> (wl_registry_bind (registry, id, interface, version)),
+			            wl_seat_destroy);
+		}
+	}
+
+	void remove (std::uint32_t id)
+	{
+		if (wl_proxy_get_id (static_cast <wl_proxy*> (static_cast <void*> (seat.get ()))) == id) {
+			log_debug ("Removing seat");
+			seat.reset ();
+		}
+	}
+};
+
+std::pair <handle <wl_registry>, handle <registry_guts> >
+get_registry (handle <wl_display> display)
 {
 	auto registry = wrap_handle (wl_display_get_registry (display.get ()), wl_registry_destroy);
 	if (!registry)
@@ -88,32 +48,49 @@ handle <wl_registry> get_registry (handle <wl_display> display)
 
 	static const wl_registry_listener listener {
 		// Event "global"
-		[] (void*, wl_registry*, std::uint32_t id, const char* interface, std::uint32_t version) {
-			log_debug ("Registry reports that object ", std::to_string (id),
-			           " implements interface \"", interface, "\", version ",
-			           std::to_string (version));
-
-			auto* descriptor = lookup_interface (interface, version);
-			if (descriptor)
-				describe_interface (*descriptor);
+		[] (void* data, wl_registry* registry, std::uint32_t id, const char* interface_name, std::uint32_t version) {
+//			report_interface_for_object (id, interface_name, version);
+			auto guts = static_cast <registry_guts*> (data);
+			guts->extract (registry, id, interface_name, version);
 		},
 		// Event "global_remove"
-		[] (void*, wl_registry*, std::uint32_t id) {
+		[] (void* data, wl_registry*, std::uint32_t id) {
 			log_debug ("Registry reports the destruction of object ", std::to_string (id));
+			auto guts = static_cast <registry_guts*> (data);
+			guts->remove (id);
 		}
 	};
 
-	wl_registry_add_listener (registry.get (), &listener, nullptr);
-	return registry;
+	auto guts = std::make_shared <registry_guts> ();
+	wl_registry_add_listener (registry.get (), &listener, guts.get ());
+	return std::tie (registry, guts);
+}
+
+handle <wl_keyboard> get_keyboard (handle <wl_seat> seat)
+{
+	auto keyboard = wrap_handle (wl_seat_get_keyboard (seat.get ()), wl_keyboard_destroy);
+	if (!keyboard)
+		lose ("Couldn't obtain a reference to the keyboard");
+	else
+		log_debug ("Successfully obtained a reference to the keyboard");
+
+	return keyboard;
 }
 
 int main ()
 {
 	auto display = get_display ();
-	auto registry = get_registry (display);
+
+	handle <wl_registry> registry;
+	handle <registry_guts> guts;
+	std::tie (registry, guts) = get_registry (display);
 
 	auto sync_callback = wrap_handle (wl_display_sync (display.get ()), wl_callback_destroy);
 	wl_display_roundtrip (display.get ());
+
+	if (!guts->seat)
+		lose ("Couldn't obtain a reference to the seat");
+	auto keyboard = get_keyboard (guts->seat);
 
 	return EXIT_SUCCESS;
 }
